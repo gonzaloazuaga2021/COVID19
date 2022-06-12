@@ -1,0 +1,334 @@
+---
+title: "Entrega M1 y M2 DCSCHD-UNSAM"
+subtitle: "Breve análisis de la evolución del COVID-19 a nivel mundial"
+author: "Gonzalo Azuaga"
+output:
+   html_document:
+      df_print: paged
+      toc: true
+      toc_float: true
+      theme: united
+---
+
+# Introducción
+
+La irrupción de la enfermedad por coronavirus COVID-19, modificó rápida y profundamente la vida de las personas. Fue identificado por primera vez en la región de Wuhan en China en diciembre del 2019, y dada su facilidad de difusión entre personas, las medidas adoptadas por los diferentes gobiernos, centradas en el aislamiento y distanciamiento social principalmente, generaron graves consecuencias en términos económicos y sociales. Según el Banco Mundial, en 2020 el PBI per cápita mundial cayó 4,6% con respecto al año anterior, estimación que superó ampliamente a la retracción que sufrió la economía mundial en 2009 producto de la crisis de las *sub prime*, siendo comparable para las economías desarrolladas con la recesión producida por la Segunda Guerra Mundial. Lo anterior produjo que la pobreza aumente considerablemente, según la misma fuente se estima que la pandemia en 2020 generó entre 119 y 124 millones de nuevos pobres con respecto a 2019[^1].
+
+[^1]: Estimación obtenida de [aqui](https://blogs.worldbank.org/es/datos/ultimas-estimaciones-del-impacto-de-la-covid-19-coronavirus-en-la-pobreza-mundial-repaso)
+
+A pesar de que el impacto de la enfermedad y de la pandemia afecta a todos los rincones del mundo, el mismo difiere sustancialmente entre países y regiones. En este sentido, en el presente informe se pretende realizar un breve análisis de la evolución que tiene la enfermedad a nivel mundial. Para ello, se trabajará con la base de datos que publica *Our World in Data*[^2] con información hasta el 6 de julio de 2021. Se sostiene que el impacto diferencial mencionado se encuentra vinculado, entre otros factores, al nivel de ingreso y desarrollo de los países, los cuales están intimamente ligados a las estructuras económicas y productivas de cada uno de ellos. De este modo, se utilizarán las siguientes variables de análisis:
+
+* PBI per cápita a Paridad de Poder de Compra (en dólares constantes de 2011).
+
+* Indice de Desarrollo Humano (IDH).
+
+* Porcentaje de personas vacunadas contra el COVID-19 con al menos 1 dosis.
+
+* Cantidad de muertos cada millón de habitantes.
+
+* Población.
+
+A lo largo del informe se buscará responder a las siguientes preguntas:
+
+* ¿El nivel de riqueza de los países influye sobre el ritmo de vacunación de su población?
+
+* ¿Qué diferencias existen en la forma de la distribución del porcentaje de personas vacunadas entre los continentes?
+  
+* ¿En qué continentes, y en especial, en qué países se concentran la mayor cantidad de muertes por millón de habitantes debido al COVID-19?
+
+[^2]: La base fue descargada de [aqui](https://github.com/owid/covid-19-data/blob/master/public/data/owid-covid-data.xlsx) el 7 de julio de 2021-
+
+En primer lugar, se activan todos los paquetes necesarios para la realización del presente informe. Luego se importa la base previamente descargada de internet, y se analiza su estructura, qué variables han sido relevadas y su tipo. Para ello resulta muy útil consultar la metadata[^3]
+
+[^3]: Se puede acceder a la metadata en el siguiente [link](https://github.com/owid/covid-19-data/blob/master/public/data/owid-covid-codebook.csv)
+
+```{r, message=FALSE, warning=FALSE}
+library(openxlsx)
+library(tidyverse)
+library(lubridate)
+library(imputeTS)
+library(gganimate)
+library(plotly)
+library(DT)
+library(nortest)
+```
+
+```{r}
+base <- read.xlsx("Base de datos/owid-covid-data_070721.xlsx", colNames=T)
+```
+
+```{r, results= "hide"}
+head(base)
+```
+
+```{r, results= "hide"}
+glimpse(base)
+```
+
+En segundo, se prepara la base importada. Se seleccionan las variables de interés, se traducen aquellas en inglés al español, se recodifica la variable de IDH a categórica y la de fecha a formato *date*. Una cuestión a tener en cuenta es que no todos los países informan el porcentaje de vacunados todos los días, es decir que existen muchos **NA** en la variable. Para solucionar este inconveniente se decidió generar una nueva variable que mantenga el valor inmediatamente anterior para completar el dato faltante en la fecha específica, utilizando la función *na.locf* del paquete **imputeTS**. De este modo, se estará observando en todos los países el último valor informado. Por otro lado, para la visualización de los resultados se trabajará con aquellos países que informen el PBI per cápita y el IDH.
+
+# Preparación, limpieza y recodificación de la base
+```{r, message=FALSE, warning=FALSE}
+base_vacunados <- base %>%
+  mutate(date = ymd(date)) %>% 
+  filter(date >= "2021-07-01", !location %in% c("World","North America","South America", "Africa","Europe", "Oceania","Asia", "European Union", "International")) %>% 
+  mutate(personas_vacunadas_por_ciento = na.locf(people_vaccinated_per_hundred, na.remaining="mean")) %>% 
+  select(iso_code,location, continente = continent, fecha =date, personas_vacunadas_por_ciento, people_vaccinated_per_hundred, pbi_per_capita = gdp_per_capita, poblacion = population, human_development_index,new_deaths_smoothed_per_million) %>% 
+  mutate(continente = case_when(continente == "Europe"~ "Europa",
+                                 continente == "South America" ~ "América del Sur",
+                                 continente == "North America" ~ "América del Norte",
+                                 continente == "Africa" ~ "África",
+                                 TRUE ~ continente
+                                 )) %>% 
+  mutate(idh = case_when(human_development_index<0.55 ~ "bajo",
+                         human_development_index>=0.55 & human_development_index<0.70 ~ "medio",
+                         human_development_index>=0.70 & human_development_index<0.80 ~ "alto",
+                         human_development_index>=0.80 ~ "muy alto"))
+                        
+```
+
+## Importación de listado de países en español
+```{r}
+paises <- read.table("Base de datos/listado_paises.txt", sep ="," , header = T, encoding="UTF-8")
+```
+
+## Matcheo por código ISO 
+```{r}
+base_vacunados <- left_join(base_vacunados, paises %>%  select (ISO3, ESPAÑOL), by = c("iso_code" = "ISO3")) 
+```
+
+```{r, echo=FALSE}
+base_vacunados <- base_vacunados %>% 
+  rename(pais = ESPAÑOL)
+```
+
+```{r, echo=FALSE}
+base_vacunados$location <- NULL
+base_vacunados$date <- NULL
+base_vacunados$people_vaccinated_per_hundred <- NULL
+base_vacunados$human_development_index <- NULL
+```
+
+```{r}
+base_vacunados_bis <- base_vacunados %>% 
+  filter(fecha == "2021-07-06", pbi_per_capita !="NA", !is.na(idh))
+```
+
+```{r}
+base_vacunados_bis$idh <- factor(base_vacunados_bis$idh, levels = c("bajo", "medio", "alto", "muy alto"))
+```
+
+# Comienzo del análisis
+
+## Riqueza vs. porcentaje de personas vacunadas
+
+Luego de preparar la base se procede a comenzar el análisis. Un primer interrogante a responder es si la riqueza de los países influye en el ritmo de vacunación de su población contra el COVID-19. Para ello, se realiza un gráfico interactivo de dispersión que vincula las variables de PBI per cápita y porcentaje de personas vacunadas con al menos 1 dosis, teniendo en cuenta la población de cada país y su correspondiente IDH, a su vez, se estima el Coeficiente de Correlación de Pearson.
+
+### Visualización interactiva
+```{r, warning= FALSE, message=FALSE, fig.width= 9}
+options(scipen=999)
+
+graf <- ggplot(data = base_vacunados_bis, aes(x = personas_vacunadas_por_ciento, y = pbi_per_capita, para_plotly = pais, para_plotly2 = pbi_per_capita, para_plotly3 = personas_vacunadas_por_ciento)) + scale_y_log10() +
+  geom_point(data = base_vacunados_bis, aes(size = poblacion/1000000, color =idh), alpha = 0.8) + 
+  geom_point(data = filter(base_vacunados_bis, pais =="Argentina"), aes(x = personas_vacunadas_por_ciento, y = pbi_per_capita, 
+                 color = idh, size = poblacion/1000000)) + 
+  geom_text(data = filter(base_vacunados_bis, pais =="Argentina"), aes(x = personas_vacunadas_por_ciento, y = pbi_per_capita, label =pais),hjust= -1, vjust = -1.2, size = 3.5, size = 11, fontface = "bold")+
+    scale_color_brewer(type = "qual", palette = "Dark2") +
+    labs(x = "% de personas vacunadas",
+       y = "PBI per cápita (en USD)",
+       color = "IDH",
+       size = "población (millones)",
+       title = "¿La riqueza de los países influye en el ritmo de vacunación contra el COVID-19?",
+       subtitle = "Datos al 06 de julio de 2021",
+       caption = "Fuente: https://ourworldindata.org/coronavirus") + 
+  theme(axis.title.x = element_text(face= "bold", colour = "black", size = 10), 
+        axis.title.y = element_text(face="bold", colour ="black", size = 10),
+        axis.title = element_text(face ="bold", size = 12)) + 
+  guides(size = FALSE) + theme_minimal() 
+```
+
+```{r, fig.width=9}
+ggplotly(graf, tooltip = c("para_plotly", "para_plotly2", "para_plotly3")) %>% 
+  layout(annotations = 
+ list(x = 1.17, y = -0.1, text = "Fuente: https://ourworldindata.org/coronavirus", 
+      showarrow = F, xref='paper', yref='paper', 
+      xanchor='right', yanchor='auto', xshift=0, yshift=0,
+      font=list(size=10, color="black"))) %>% 
+   layout(annotations = 
+ list(x = 0.3, y = 1.04, text = "Datos al 6 de julio de 2021", 
+      showarrow = F, xref='paper', yref='paper', 
+      xanchor='right', yanchor='auto', xshift=0, yshift=0,
+      font=list(size=14, color="black"))
+ )
+```
+
+```{r}
+cor.test(base_vacunados_bis$pbi_per_capita,base_vacunados_bis$personas_vacunadas_por_ciento)
+```
+
+A partir de la visualización y de la estimación del Coeficiente de Correlación de Pearson (0.5614) es posible observar una asociación lineal positiva entre ambas variables, pero no de gran intensidad. Es decir que, países con mayores niveles de riqueza tendrían una mejor performance con respecto al porcentaje de personas vacunadas contra el COVID-19 al 06/07/21. El test de hipótesis asociado al Coeficiente de Correlación Poblacional indica que existe una relación significativa entre ambas variables, ya que se rechaza la hipótesis nula ($\rho = 0$) a un nivel de significancia del 5%. Cabe recordar que la correlación no implica causalidad en experimentos de tipo mensurativos[^4]. 
+
+Por otro lado, resulta interesante observar como se agrupan los países en relación a su IDH, si bien es claro que valores de IDH elevados se correlacionan con niveles de PBI per cápita altos, ya que en la estimación de dicho índice una de las dimensiones es el ingreso, si se percibe una mayor variabilidad, sobre el porcentaje de personas vacunadas, en los niveles de *"bajo"* y, en menor medida, *"alto"* en comparación al resto. Situación que puede observarse al comparar los Coeficientes de Variación de cada nivel de IDH (Cuadro 1). En este sentido, a partir de la interactividad del gráfico es posible reconocer los puntos más "extremos" para cada nivel de IDH. Para el nivel *bajo* el país ubicado más a la derecha es República Centroafricana, con un porcentaje de vacunados de 74.05%. Mientras que para *alto*, los países con mejor desempeño en términos de vacunación son: Islas Marshall (82.05%) y China y Uzbekistán (67.2% y 66.85% respectivamente). Por último, en el nivel *muy alto* se observan países con un leve porcentaje de vacunados, como es el caso de Serbia y Mauricio (3.28% y 3.45%), mientras otros con niveles muy altos, como Malta e Islandia (82.50% y 76.50% respectivamente).
+
+[^4]: Para complemetar el análisis se estimó un modelo de regresión lineal simple, donde la variable dependiente es *personas_vacunadas_por_ciento* ($Y_i$) y la independiente *pbi_per_cápita* ($X_i$). Se empleó el siguiente modelo: $Y_i$ ~ $N(\mu_i, \sigma^2)indep$    $\mu_i$ = $\beta_0$ + $\beta_1*X_i$, obteniendo la consecuente recta estimada $\mu_i =  15.47 + 0.0006*X_i$. Se encontró una relación significativa entre ambas variables al realizar el test de hipótesis asociado a $\beta_1$, lo que resulta lógico por el resultado obtenido a través del test de hipótesis del Coeficiente de Correlación de Pearson. Pero al estudiar el cumplimiento de los supuestos no se cumplía con la normalidad. Por una cuestión de extensión del informe no se incluyó el análisis de regresión, pero sí se tuvo en cuenta.
+
+```{r}
+tabla_resumen <- base_vacunados_bis %>% 
+  group_by(idh) %>% 
+  summarise(CV = sd(personas_vacunadas_por_ciento)/mean(personas_vacunadas_por_ciento))
+```
+
+### Cuadro 1. Variabilidad entre niveles de IDH
+```{r, }
+options(digits = 3) 
+knitr::kable(
+tabla_resumen [1:4, ], col.names = c("IDH", "CV"), caption = "Cuadro 1. Variabilidad del porcentaje de personas vacunadas entre niveles de IDH", align = "lc") 
+```
+
+Por otro lado, si comparamos a la Argentina con países de igual idh (*"muy alto"*) se observa que la misma se ubica en la posición 37 (de 63) en relación al porcentaje de personas vacunadas.
+
+```{r}
+ranking <- base_vacunados_bis %>% 
+     filter(idh == "muy alto") %>% 
+     arrange(-personas_vacunadas_por_ciento)
+
+ranking <- ranking %>% 
+  mutate(posicion = rownames(ranking)) %>% 
+  select(pais, personas_vacunadas_por_ciento, posicion) %>% 
+  filter(pais == "Argentina")
+```
+
+```{r, }
+options(digits = 4) 
+knitr::kable(
+ranking [1:1, ], col.names = c("País", "Porcentaje", "Posición"), caption = "Porcentaje de personas vacunadas con al menos 1 dosis en Argentina. Al 06/07/21", align = "lcc") 
+```
+
+## Distribución del porcentaje de personas vacunadas por continente
+
+Otro aspecto que resulta interesante analizar es la distribuición asociada al porcentaje de personas vacunadas por continente. Para ello, se estiman distintas medidas descriptivas (tendencia central, dispersión y asimetría) y se realiza una visualización para complementar el análisis.
+
+```{r}
+tabla_resumen2 <- base_vacunados_bis %>% 
+  group_by(continente) %>% 
+  summarise(Media = round (mean (personas_vacunadas_por_ciento,na.rm = T),2),
+            Mediana = round (median (personas_vacunadas_por_ciento, na.rm = T),2),
+            Desvio = round (sd (personas_vacunadas_por_ciento, na.rm = T),2),
+            CV = round (Desvio/Media*100,2),
+            Asimetria = round (3*(Media-Mediana)/Desvio,2),
+            n = n())
+```
+
+### Cuadro 2. Medidas descriptivas
+```{r}
+options(digits = 4) 
+knitr::kable(
+tabla_resumen2 [1:6, ], caption = "Cuadro 2. Medidas descriptivas del porcentaje de personas vacunadas por continente al 06/07/21", align = "lcccccc") 
+```
+
+### Visualización
+```{r, fig.width= 9.7}
+ggplot() + geom_density(data = base_vacunados_bis, aes(x=personas_vacunadas_por_ciento, color = continente), show.legend = F) + facet_wrap(~continente, scale = "free") + scale_color_brewer(type = "qual", palette = "Dark2") +
+    labs(x = "% de personas vacunadas",
+       y = " ",
+       title = "Distribución del porcentaje de personas vacunadas con al menos 1 dosis contra el COVID-19 por continente",
+       subtitle = "Datos al 06 de julio de 2021",
+       caption = "Fuente: https://ourworldindata.org/coronavirus") + 
+  theme(axis.title.x = element_text(face= "bold", colour = "black", size = 10.5), 
+        axis.title = element_text(face ="bold", size = 10)) + theme_minimal() 
+```
+
+A partir del Cuadro 2 y del gráfico se observa que en promedio los continentes de Europa y América del Sur son los que presentan un mayor porcentaje de personas vacunadas contra el COVID-19 al 06/07/21. Por otro lado, el continente africano registra la mayor variabilidad entre unidades experimentales, aspecto que se observa al comparar el Coeficiente de Variación (CV) de dicho continente con respecto al resto, seguido por Oceanía. Por último, en relación a la asimetría de las distribuciones se percibe que Oceanía y América del Norte resultan ser más simétricas que el resto, registran Coeficientes de Asimetría de Pearson más cercanos a cero. Mientras que Europa presenta una marcada asimetría negativa, y África y Asia una positiva, es decir que la gran mayoría de los países europeos relevados registran porcentaje de personas vacunadas mayores a la media (suprapromediales), mientras que ocurre lo contrario para los países africanos (subpromediales) y asiáticos.
+
+## Mortalidad por COVID-19
+
+Por último, se desea observar cómo fue la evolución de la mortalidad por el COVID-19 entre países, para ello se empleará un gráfico de barras animados en donde se registra la mortandad de los primeros 20 países a través del tiempo identificando el continente de pertenencia de cada país. Para evitar que la animación insuma bastante tiempo, se decidió mostrar la dinámica de la mortalidad a partir del mes de mayo de 2021.
+
+```{r}
+muertes <- base %>%
+  mutate(date = ymd(date)) %>% 
+  filter(!location %in% c("World","North America","South America", "Africa","Europe", "Oceania","Asia", "European Union", "International"), date >= "2021-01-01") %>% 
+  select(iso_code, pais = location, continente = continent, fecha = date, muertes_millon_habitantes = total_deaths_per_million) %>% 
+  mutate(continente = case_when(continente == "Europe"~ "Europa",
+                                 continente == "South America" ~ "América del Sur",
+                                 continente == "North America" ~ "América del Norte",
+                                 continente == "Africa" ~ "África",
+                                 TRUE ~ continente
+                                 ),
+         muertes_millon_habitantes = round(muertes_millon_habitantes,1))
+```
+
+```{r}
+muertes <- left_join(muertes, paises %>%  select (ISO3, ESPAÑOL), by = c("iso_code" = "ISO3")) %>% 
+  rename(Pais = ESPAÑOL) %>% 
+  select(-pais)
+```
+
+```{r}
+muertes <- muertes %>% 
+  na.omit() %>% 
+  filter(fecha > "2021-04-30") %>% 
+  arrange(fecha, -muertes_millon_habitantes) %>%
+  group_by(fecha) %>%
+  mutate(orden = min_rank(muertes_millon_habitantes)) %>% 
+  top_n(20, muertes_millon_habitantes)
+```
+
+### Visualización animada
+```{r, message= FALSE, warning= FALSE, fig.width=9}
+ggplot(muertes, aes (group = Pais)) +
+  geom_col(aes(x = muertes_millon_habitantes, y = factor(orden), fill = continente)) +
+  geom_text(aes(x = muertes_millon_habitantes, y = factor(orden), label = Pais,
+            size = 3.5, hjust=0.3)) +
+  scale_fill_viridis_d(alpha =  0.5) +
+  theme_minimal() +
+  transition_time(fecha) + 
+  labs(title = "Top 20 de países con mayor mortalidad por COVID-19",
+      subtitle = 'Fecha:  {frame_time}',
+       caption = "Fuente: https://ourworldindata.org/coronavirus",
+       x = 'muertes por millón de habitantes', y = '') +
+  theme(plot.title = element_text(size = 14, face ="bold"),
+        plot.subtitle = element_text(size = 12),
+        axis.text.x  = element_text(size = 12),
+        axis.ticks.y = element_blank(),
+        axis.text.y  = element_blank(),
+        plot.caption = element_text(face = "bold"),
+        legend.position = "bottom",
+        legend.title = element_blank()) +
+  guides(size = FALSE) 
+
+
+anim_save('bar_race_covid_deaths.gif')
+```
+
+A partir del gráfico animado es posible reconocer varias cuestiones interesantes: en primer lugar, que de los 20 países con mayor mortandad producto del COVID-19 la mayoría corresponde al continente europeo. En segundo, que el país con mayor mortalidad es siempre Perú y que la diferencia de él con el resto de los países parece mantenerse a lo largo del tiempo analizado. En tercero, se destaca el avance que van teniendo Brasil, Colombia y Argentina, el primero de ellos colocándose como el segundo país de América del Sur con mayor mortalidad, seguido de cerca por Colombia y Argentina. Para el 6 de julio de 2021 Brasil ocupaba la posición novena, Colombia la doceava y Argentina la treceava (Cuadro 3). Por último, resulta interesante la relativa estabilidad que mantienen los países europeos, salvo algunas pequeñas modificaciones que se perciben, y hacia el final del período el paulatino descenso de Estados Unidos y de México del top 20 y ascenso de Paraguay.
+
+```{r, message= FALSE}
+tabla_resumen3 <- muertes %>% 
+  filter(fecha == "2021-07-06") %>% 
+  select(Pais, muertes_millon_habitantes)
+```
+
+```{r, echo =FALSE}
+tabla_resumen3$fecha <- NULL
+```
+
+### Cuadro 3. Ranking
+```{r}
+datatable(tabla_resumen3, caption = "Cuadro 3. Top 20 de mortalidad por COVID 19. Al 6 de julio de 2021",
+         colnames = c('País', 'Muertes/mill.hab'))
+```
+
+# Conclusiones
+
+A partir del análisis exploratorio realizado es posible reconocer indicios de la existencia de un impacto diferencial de la pandemia a nivel mundial hasta el 06 de julio de 2021. En relación al primer interrogante, se observó la vigencia de una relación positiva, de baja intensidad, entre el porcentaje de personas vacunadas y el nivel de ingreso de cada país. Por otro lado, el bajo grado de asociación mencionado en parte está vinculado a la variabilidad registrada entre países, fenómeno que pudo captarse al comparar los CV entre los niveles de IDH de los mismos. 
+
+Al comparar la performance de vacunación por continente se evidenció que Europa y América del Sur registran el mayor número promedio de personas vacunadas. África presenta una mayor variabilidad entre sus países en comparación al resto (es decir que conviven países con bajos niveles de porcentaje de vacunación con otros con elevados). Por otro lado, en términos de asimetría se observó que la gran mayoría de los países europeos registran porcentaje de personas vacunadas mayores a la media, mientras que ocurre lo contrario para los países africanos y asiáticos.
+
+Por último, la evolución de la mortalidad por COVID-19 evidenció el profundo impacto que está teniendo dicha enfermedad por sobre Perú seguido de cerca por Brasil y, en el último tiempo, por Colombia y Argentina en relación a los países de América del Sur. Por otro lado, se observó que la proporción de países europeos en el ranking es mayor que el resto y que dicha proporción se mantiene bastante estable.
+
+
+
+
+
+
